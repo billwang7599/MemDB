@@ -1,5 +1,5 @@
 # MemDB
-Memory everywhere. I want to remember everything. 
+Memory everywhere. I want to remember everything. Everything is still a WIP
 
 A hybrid database.
 
