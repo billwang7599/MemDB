@@ -7,7 +7,7 @@ Document refers to markdown-esque files.
 
 ## Index
 We index on Vectors, and tags.
-We should also have FTS (full text search) via some reverse key-word index?
+We should also have FTS (full text search) via some inverted key-word index?
 Index should live in memory, with a persistent disk backing in case of failures.
 So in read path, just read from memory.
 In write path, we do write-through--on document save, we update index in both the disk and memory
@@ -32,3 +32,6 @@ We probably shouldn't have a title.
 - documents that do, we have to have an extract mechanism
 - title has to be a good summary of the content
 - would rather just have the tags summarize topics in the document
+
+# File Persistance
+We'll use log-structured hash-table (same architecture at Bitcask)
