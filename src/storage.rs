@@ -45,37 +45,58 @@ impl Record {
 
     // encode in order of fields
     fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.push(self.op);
-        buf.extend_from_slice(&self.id.value().to_le_bytes());
-        buf.extend_from_slice(&(self.content.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&self.content);
+        let mut body = Vec::new();
+        body.push(self.op);
+        body.extend_from_slice(&self.id.value().to_le_bytes());
+        body.extend_from_slice(&(self.content.len() as u32).to_le_bytes());
+        body.extend_from_slice(&self.content);
+
+        let mut buf = Vec::with_capacity(4 + body.len());
+        let crc = crc32fast::hash(&body);
+        buf.extend_from_slice(&crc.to_le_bytes());
+        buf.extend_from_slice(&body);
         buf
     }
 
-    // assume start at op (beginning of record)
+    // assume start at crc (beginning of record)
     fn decode(reader: &mut impl Read) -> io::Result<Self> {
+        let mut crc_buf = [0u8; 4];
+        reader.read_exact(&mut crc_buf)?;
+        let stored_crc = u32::from_le_bytes(crc_buf);
+
+        // the crc covers everything after itself, in on-disk order
+        let mut hasher = crc32fast::Hasher::new();
+
         let mut op = [0u8; 1];
         reader.read_exact(&mut op)?;
+        hasher.update(&op);
 
         let mut id_buf = [0u8; 8];
         reader.read_exact(&mut id_buf)?;
+        hasher.update(&id_buf);
         let id: DocumentId = DocumentId(u64::from_le_bytes(id_buf));
 
         let mut content_len_buf = [0u8; 4];
         reader.read_exact(&mut content_len_buf)?;
+        hasher.update(&content_len_buf);
         let content_len: u32 = u32::from_le_bytes(content_len_buf);
 
         let mut content = vec![0u8; content_len as usize];
         reader.read_exact(&mut content)?;
+        hasher.update(&content);
 
-        Ok (
-            Record {
-                op: op[0],
-                id,
-                content,
-            }
-        )
+        if hasher.finalize() != stored_crc {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checksum mismatch",
+            ));
+        }
+
+        Ok(Record {
+            op: op[0],
+            id,
+            content,
+        })
     }
 }
 
@@ -127,12 +148,14 @@ mod tests {
     #[test]
     fn encode_lays_out_bytes_in_order() {
         let record = Record::from_operation(&insert(7, "hi"));
-        let expected: Vec<u8> = vec![
+        let body: Vec<u8> = vec![
             0, // op: insert
             7, 0, 0, 0, 0, 0, 0, 0, // id: u64 little-endian
             2, 0, 0, 0, // content length: u32 little-endian
             b'h', b'i', // content
         ];
+        let mut expected = crc32fast::hash(&body).to_le_bytes().to_vec(); // crc first
+        expected.extend_from_slice(&body);
         assert_eq!(record.encode(), expected);
     }
 
@@ -204,5 +227,51 @@ mod tests {
             let err = Record::decode(&mut reader).unwrap_err();
             assert_eq!(err.kind(), ErrorKind::UnexpectedEof, "cut at {cut}");
         }
+    }
+
+    fn decode_bytes(bytes: &[u8]) -> io::Result<Record> {
+        let mut reader = bytes;
+        Record::decode(&mut reader)
+    }
+
+    #[test]
+    fn corrupt_crc_is_invalid_data() {
+        let mut bytes = Record::from_operation(&insert(1, "hello")).encode();
+        bytes[0] ^= 0x01; // flip a bit inside the stored crc
+        let err = decode_bytes(&bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn corrupt_op_is_invalid_data() {
+        let mut bytes = Record::from_operation(&insert(1, "hello")).encode();
+        bytes[4] ^= 0x01; // op byte
+        let err = decode_bytes(&bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn corrupt_id_is_invalid_data() {
+        let mut bytes = Record::from_operation(&insert(1, "hello")).encode();
+        bytes[5] ^= 0x01; // first id byte
+        let err = decode_bytes(&bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn corrupt_content_is_invalid_data() {
+        let mut bytes = Record::from_operation(&insert(1, "hello")).encode();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01; // last content byte
+        let err = decode_bytes(&bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn corrupt_length_is_detected() {
+        let mut bytes = Record::from_operation(&insert(1, "hello")).encode();
+        bytes[13] ^= 0x01; // length 5 -> 4: still fits in the file, so only the crc catches it
+        let err = decode_bytes(&bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 }
