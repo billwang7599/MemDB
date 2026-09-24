@@ -5,6 +5,8 @@ A hybrid database.
 
 Document refers to markdown-esque files.
 
+Implemented as an append-only log.
+
 ## Index
 We index on Vectors, and tags.
 We should also have FTS (full text search) via some inverted key-word index?
