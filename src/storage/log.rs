@@ -1,5 +1,5 @@
 use super::record::{Operation, Record};
-use crate::document::DocumentId;
+use crate::document::{Document, DocumentId};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -111,6 +111,17 @@ impl Log {
         }
         Ok(offset)
     }
+
+    /// Returns the current document for `id`, or `None` if it doesn't exist.
+    pub fn get(&mut self, id: DocumentId) -> io::Result<Option<Document>> {
+        let Some(offset) = self.keydir.get(&id).copied() else {
+            return Ok(None);
+        };
+        self.file.seek(SeekFrom::Start(offset))?;
+        let record: Record = Record::decode(&mut self.file)?;
+        let doc: Document = record.into_document()?;
+        Ok(Some(doc))
+    }
 }
 
 fn invalid_data(msg: &str) -> io::Error {
@@ -120,7 +131,6 @@ fn invalid_data(msg: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{Document, DocumentId};
     use std::io::{ErrorKind, Seek, SeekFrom};
 
     fn insert(id: u64, content: &str) -> Operation {
@@ -344,6 +354,76 @@ mod tests {
         let log = Log::open(&path).unwrap();
         assert_eq!(log.keydir.len(), 1);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), end);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn get_returns_an_inserted_document() {
+        let path = temp_path("get_insert");
+        let mut log = Log::create(&path).unwrap();
+        log.append(&insert(1, "hello")).unwrap();
+
+        let doc = log.get(DocumentId(1)).unwrap().unwrap();
+        assert_eq!(doc.id(), DocumentId(1));
+        assert_eq!(doc.content, "hello");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn get_returns_none_for_a_missing_id() {
+        let path = temp_path("get_missing");
+        let mut log = Log::create(&path).unwrap();
+        log.append(&insert(1, "hello")).unwrap();
+        assert!(log.get(DocumentId(2)).unwrap().is_none());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn get_returns_the_latest_update() {
+        let path = temp_path("get_update");
+        let mut log = Log::create(&path).unwrap();
+        log.append(&insert(1, "old")).unwrap();
+        log.append(&Operation::Update(Document::new(DocumentId(1), String::from("new"))))
+            .unwrap();
+        assert_eq!(log.get(DocumentId(1)).unwrap().unwrap().content, "new");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn get_returns_none_after_a_delete() {
+        let path = temp_path("get_delete");
+        let mut log = Log::create(&path).unwrap();
+        log.append(&insert(1, "hello")).unwrap();
+        log.append(&Operation::Delete(DocumentId(1))).unwrap();
+        assert!(log.get(DocumentId(1)).unwrap().is_none());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn get_picks_the_right_document_among_many() {
+        let path = temp_path("get_many");
+        let mut log = Log::create(&path).unwrap();
+        for i in 0..20 {
+            log.append(&insert(i, &format!("doc {i}"))).unwrap();
+        }
+        assert_eq!(log.get(DocumentId(13)).unwrap().unwrap().content, "doc 13");
+        assert_eq!(log.get(DocumentId(0)).unwrap().unwrap().content, "doc 0");
+        assert_eq!(log.get(DocumentId(19)).unwrap().unwrap().content, "doc 19");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn get_works_after_reopening_and_after_more_appends() {
+        let path = temp_path("get_reopen");
+        let mut log = Log::create(&path).unwrap();
+        log.append(&insert(1, "first")).unwrap();
+        drop(log);
+
+        let mut log = Log::open(&path).unwrap();
+        assert_eq!(log.get(DocumentId(1)).unwrap().unwrap().content, "first");
+        log.append(&insert(2, "second")).unwrap();
+        assert_eq!(log.get(DocumentId(2)).unwrap().unwrap().content, "second");
+        assert_eq!(log.get(DocumentId(1)).unwrap().unwrap().content, "first");
         std::fs::remove_file(&path).unwrap();
     }
 }

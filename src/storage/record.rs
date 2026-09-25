@@ -97,6 +97,19 @@ impl Record {
             content,
         })
     }
+
+    // only insert and update records carry a document
+    pub(crate) fn into_document(self) -> io::Result<Document> {
+        if !matches!(self.op, 0 | 2) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record does not hold a document",
+            ));
+        }
+        let content: String = String::from_utf8(self.content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(Document::new(self.id, content))
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +264,38 @@ mod tests {
         let mut bytes = Record::from_operation(&insert(1, "hello")).encode();
         bytes[13] ^= 0x01; // length 5 -> 4: still fits in the file, so only the crc catches it
         let err = decode_bytes(&bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn into_document_returns_the_id_and_content() {
+        let doc = round_trip(&insert(5, "hello")).into_document().unwrap();
+        assert_eq!(doc.id(), DocumentId(5));
+        assert_eq!(doc.content, "hello");
+    }
+
+    #[test]
+    fn into_document_accepts_update_records() {
+        let op = Operation::Update(Document::new(DocumentId(2), String::from("new")));
+        let doc = round_trip(&op).into_document().unwrap();
+        assert_eq!(doc.content, "new");
+    }
+
+    #[test]
+    fn into_document_rejects_delete_records() {
+        let record = round_trip(&Operation::Delete(DocumentId(1)));
+        let err = record.into_document().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn into_document_rejects_invalid_utf8() {
+        let record = Record {
+            op: 0,
+            id: DocumentId(1),
+            content: vec![0xff, 0xfe],
+        };
+        let err = record.into_document().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 }
