@@ -132,3 +132,52 @@ fn a_non_numeric_id_is_a_usage_error() {
     assert_eq!(out.status.code(), Some(2));
     std::fs::remove_file(&log).unwrap();
 }
+
+#[test]
+fn put_joins_several_words_into_one_document() {
+    let log = temp_log("words");
+    run(&[&log, "new"]);
+    run(&[&log, "put", "1", "hello", "big", "world"]);
+
+    assert_eq!(stdout(&run(&[&log, "get", "1"])), "hello big world\n");
+    std::fs::remove_file(&log).unwrap();
+}
+
+#[test]
+fn shell_put_without_content_is_an_error_not_a_stdin_read() {
+    let log = temp_log("shell_no_content");
+    run(&[&log, "new"]);
+
+    let out = run_with_stdin(&[&log], "put 1\nput 2 ok\nget 2\n");
+    assert!(out.status.success());
+    assert_eq!(stdout(&out), "ok\n");
+    assert!(stderr(&out).contains("usage: put"));
+    std::fs::remove_file(&log).unwrap();
+}
+
+#[test]
+fn shell_rejects_new_and_bad_ids_but_keeps_going() {
+    let log = temp_log("shell_reject");
+    run(&[&log, "new"]);
+
+    let out = run_with_stdin(&[&log], "new\nget abc\nput 1 fine\nget 1\n");
+    assert!(out.status.success());
+    assert_eq!(stdout(&out), "fine\n");
+    assert!(stderr(&out).contains("a log is already open"));
+    assert!(stderr(&out).contains("invalid value 'abc'"));
+    std::fs::remove_file(&log).unwrap();
+}
+
+#[test]
+fn shell_help_lists_the_commands_and_quit_ends_the_session() {
+    let log = temp_log("shell_help");
+    run(&[&log, "new"]);
+
+    let out = run_with_stdin(&[&log], "help\nquit\nget 1\n");
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(text.contains("put") && text.contains("get") && text.contains("delete"));
+    // nothing after `quit` ran, so no "no document" error
+    assert!(!stderr(&out).contains("no document"));
+    std::fs::remove_file(&log).unwrap();
+}
