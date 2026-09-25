@@ -44,14 +44,14 @@ impl Record {
 
     // encode in order of fields
     pub(crate) fn encode(&self) -> Vec<u8> {
-        let mut body = Vec::new();
+        let mut body: Vec<u8> = Vec::new();
         body.push(self.op);
         body.extend_from_slice(&self.id.value().to_le_bytes());
         body.extend_from_slice(&(self.content.len() as u32).to_le_bytes());
         body.extend_from_slice(&self.content);
 
-        let mut buf = Vec::with_capacity(4 + body.len());
-        let crc = crc32fast::hash(&body);
+        let mut buf: Vec<u8> = Vec::with_capacity(4 + body.len());
+        let crc: u32 = crc32fast::hash(&body);
         buf.extend_from_slice(&crc.to_le_bytes());
         buf.extend_from_slice(&body);
         buf

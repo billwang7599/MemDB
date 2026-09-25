@@ -20,8 +20,8 @@ struct ReplayOutcome {
 }
 
 fn replay(file: &mut File) -> io::Result<ReplayOutcome> {
-    let mut keydir = HashMap::new();
-    let mut valid_end = file.seek(SeekFrom::Start(HEADER_LEN as u64))?;
+    let mut keydir: HashMap<DocumentId, u64> = HashMap::new();
+    let mut valid_end: u64 = file.seek(SeekFrom::Start(HEADER_LEN as u64))?;
 
     loop {
         let offset = valid_end;
@@ -88,10 +88,13 @@ impl Log {
 
     /// Appends a record, syncs it to disk, and returns its starting byte offset.
     pub fn append(&mut self, op: &Operation) -> io::Result<u64> {
-        let offset = self.file.metadata()?.len();
-        let bytes = Record::from_operation(op).encode();
+        let offset: u64 = self.file.metadata()?.len();
+        let bytes: Vec<u8> = Record::from_operation(op).encode();
 
-        let result = self.file.write_all(&bytes).and_then(|()| self.file.sync_all());
+        let result: io::Result<()> = self
+            .file
+            .write_all(&bytes)
+            .and_then(|()| self.file.sync_all());
         if let Err(e) = result {
             // drop any partial record so the next append doesn't land after it
             let _ = self.file.set_len(offset);
